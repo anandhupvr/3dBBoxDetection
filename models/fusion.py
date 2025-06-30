@@ -47,12 +47,8 @@ class MaskedFusion(nn.Module):
         pc = self.pc_fc(pc_feats)  # [B, 256]
         pc = pc.unsqueeze(-1).unsqueeze(-1)  # [B, 256, 1, 1]
         pc = pc.expand(-1, -1, 15, 20)  # [B, 256, 15, 20]
-        
-        # Downsample mask to match feature resolution
-        mask = F.interpolate(mask.unsqueeze(1).float(), 
-                            size=(15, 20), 
-                            mode='nearest')  # [B, 1, 15, 20]
-        
+
+        mask = mask.unsqueeze(1)
         # Concatenate features
         combined = torch.cat([rgb, pc], dim=1)  # [B, 512, 15, 20]
         

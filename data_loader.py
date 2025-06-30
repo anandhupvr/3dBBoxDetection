@@ -6,6 +6,7 @@ import  torch.nn.functional as F
 from PIL import Image
 import numpy as np
 from torch_geometric.data import Data, Batch
+from torch_cluster import fps
 
 
 class Challenge3DDataset(Dataset):
@@ -13,7 +14,7 @@ class Challenge3DDataset(Dataset):
         self.root_dir = root_dir
         self.img_size = img_size
         self.sample_dirs =  sorted([os.path.join(root_dir, d) for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))])
-        self.npoints = 1024
+        self.npoints = npoints
 
         self.rgb_transform = transforms.Compose([
             transforms.Resize(self.img_size),
@@ -28,8 +29,8 @@ class Challenge3DDataset(Dataset):
         
         # Sample 70% from lower half (ground plane)
         z_val = points[:,2]
-        lower_idx = np.where(z_val < np.median(z_val))[0]
-        upper_idx = np.where(z_val >= np.median(z_val))[0]
+        upper_idx = np.where(z_val < np.median(z_val))[0]
+        lower_idx = np.where(z_val >= np.median(z_val))[0]
         
         n_lower = int(n_samples * 0.7)
         n_upper = n_samples - n_lower
@@ -52,8 +53,8 @@ class Challenge3DDataset(Dataset):
         if self.rgb_transform:
             image = self.rgb_transform(image)
 
-        scale_w = self.img_size[1] / org_w  # width is 640
-        scale_h = self.img_size[0] / org_h  # height is 480
+        scale_w = self.img_size[1] / org_w
+        scale_h = self.img_size[0] / org_h
 
         #point cloud
         pc = np.load(os.path.join(sample_dir, "pc.npy"))
@@ -62,7 +63,8 @@ class Challenge3DDataset(Dataset):
         xyz = pc.reshape(3, -1).T
         # pc = xyz[np.isfinite(xyz).all(1)]
         pc = torch.from_numpy(self.sample_pc(xyz, self.npoints)).float()
-        pc = pc - pc.mean(dim=0) 
+        # pc_center = pc.mean(dim=0)
+        # pc = pc - pc_center
         #####  there is flat ground plane better to sample more from there ?
 
         #mask
@@ -76,19 +78,24 @@ class Challenge3DDataset(Dataset):
         combined_mask = torch.from_numpy(combined_mask).unsqueeze(0)  # [1, H, W]
         combined_mask = F.interpolate(
             combined_mask.float().unsqueeze(0),  # [1, 1, H, W] 
-            size=(480, 640),
+            size=(15, 20),
             mode='nearest'
-        ).squeeze().long()  # [480, 640]
+        ).squeeze().long()  # [15, 20]
 
         #3dbbox
         bbox3d = np.load(os.path.join(sample_dir, "bbox3d.npy"))
-        bbox3d = torch.from_numpy(bbox3d).float()
+        bbox3d_scaled = bbox3d.copy()
+        bbox3d_scaled[:, :, 0] *= scale_w  # Scale X coordinates
+        bbox3d_scaled[:, :, 1] *= scale_h  # Scale Y coordinates
+        # bbox3d_centered = bbox3d_scaled - pc_center.reshape(1, 1, 3)
+        bbox3d = torch.from_numpy(bbox3d_scaled).float()
+        # bbox3d = bbox3d - pc_center.reshape(1, 1, 3)
         
         # Add num_boxes to the return dictionary
         return {
             "image": image,            # [3, 480, 640]
             "pointcloud": pc,           # [1024, 3]
-            "mask": combined_mask,      # [480, 640]
+            "mask": combined_mask,      # [15, 20]
             "bbox3d": bbox3d,           # [N, 8, 3] (variable)
             "num_boxes": torch.tensor(bbox3d.shape[0])  # scalar
         }
@@ -96,7 +103,6 @@ class Challenge3DDataset(Dataset):
 def collate_fn(batch):
     # Handle fixed-size elements by stacking
     images = torch.stack([item['image'] for item in batch])
-    # pointclouds = torch.stack([item['pointcloud'] for item in batch])
     masks = torch.stack([item['mask'] for item in batch])
     num_boxes = torch.stack([item['num_boxes'] for item in batch])
     
@@ -107,7 +113,7 @@ def collate_fn(batch):
     data_list = []
     for i, item in enumerate(batch):
         pointcloud = item['pointcloud']  # [N, 3]
-        data = Data(pos=pointcloud)  # add x=item['features'] if needed
+        data = Data(pos=pointcloud)
         data_list.append(data)
     
     pointcloud_batch = Batch.from_data_list(data_list)
@@ -116,7 +122,8 @@ def collate_fn(batch):
     return {
         'images': images,          # [B, 3, 480, 640]
         'pointclouds': pointcloud_batch, # [B, 1024, 3]
-        'masks': masks,            # [B, 480, 640]
+        'masks': masks,            # [B, 15, 20]
         'bboxes': bboxes,          # List of [N_i, 8, 3] tensors
         'num_boxes': num_boxes     # [B]
-    }
+    } 
+    
