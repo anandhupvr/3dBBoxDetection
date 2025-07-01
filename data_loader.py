@@ -8,6 +8,8 @@ import numpy as np
 from torch_geometric.data import Data, Batch
 from torch_cluster import fps
 
+from utils import corners_to_parametric
+
 
 class Challenge3DDataset(Dataset):
     def __init__(self, root_dir, npoints=4096, img_size=(480, 640)):
@@ -69,11 +71,12 @@ class Challenge3DDataset(Dataset):
 
         #mask
         mask = np.load(os.path.join(sample_dir, "mask.npy"))
+        # import pdb; pdb.set_trace()
         # Create single-channel combined mask
         combined_mask = np.zeros(mask.shape[1:], dtype=np.uint8)  # [H, W]
         for obj_idx in range(mask.shape[0]):
             combined_mask[mask[obj_idx] > 0] = obj_idx + 1  # 0=bg, 1=obj1, ..., 18=obj18
-        
+        # TODO : Handle overlapping masks
         # Convert to tensor and resize
         combined_mask = torch.from_numpy(combined_mask).unsqueeze(0)  # [1, H, W]
         combined_mask = F.interpolate(

@@ -8,7 +8,7 @@ from data_loader import Challenge3DDataset, collate_fn
 
 from models.model import Simple3DDetectionModel
 
-from utils import BoxLoss
+from utils import BoxLoss, Mask3DLoss
 
 import open3d as o3d
 import matplotlib
@@ -111,7 +111,9 @@ def train_single_phase(model, dataloader, loss_fn, epochs=10, device='cuda'):
                 # Forward pass
                 optimizer.zero_grad()
                 pred = model(batch)
-                loss = loss_fn(pred, batch)
+                # import pdb; pdb.set_trace()
+                # loss = loss_fn(pred, batch)
+                loss = loss_fn(pred['pred_boxes'], pred['pred_scores'], batch['bboxes'])
                 
                 # Backward pass
                 loss.backward()
@@ -142,7 +144,8 @@ def main():
                            collate_fn=collate_fn, num_workers=4)
     
     model = Simple3DDetectionModel()
-    loss_fn = BoxLoss()
+    # loss_fn = BoxLoss()
+    loss_fn = Mask3DLoss()
     
     # Single-phase training
     train_single_phase(model, dataloader, loss_fn, epochs=50, device=device)

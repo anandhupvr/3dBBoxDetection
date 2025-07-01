@@ -20,10 +20,10 @@ def main():
     for batch in dataLoader:
     
         pred = model(batch)
+        import pdb; pdb.set_trace()
         for pr in pred:
-            print("prediction shapes  : ", pr.shape)
-
-        lsdict = loss(pred, batch)
+            print("prediction shapes  : ", len(pr))
+            # lsdict = loss(pred, batch)
         break
 
 if __name__ == "__main__":
