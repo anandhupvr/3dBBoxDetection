@@ -262,7 +262,7 @@ class Mask3DLoss(nn.Module):
    
             # Case 2/3/4 unified handling
             num_pairs = min(len(boxes), len(gt_params))
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             # Regression loss for matched pairs
             if num_pairs > 0:
                 reg_loss = self.reg_loss(boxes[:num_pairs], gt_params[:num_pairs])

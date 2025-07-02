@@ -102,7 +102,13 @@ def validate(model, val_loader, loss_fn, device):
     val_loss = 0.0
     with torch.no_grad():
         for batch in val_loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
+            batch = {
+                    'images': batch['images'].to(device),
+                    'pointclouds': batch['pointclouds'].to(device), 
+                    'masks': batch['masks'].to(device),
+                    'bboxes': [b.to(device) for b in batch['bboxes']],  # List of tensors
+                    'num_boxes': batch['num_boxes'].to(device)
+                    }
             pred = model(batch)
             loss = loss_fn(pred['pred_boxes'], pred['pred_scores'], batch['bboxes'])
             val_loss += loss.item()
@@ -170,10 +176,10 @@ def train_single_phase(model, dataloader, val_loader, loss_fn, epochs=10, device
             # Save best model
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                torch.save(model.state_dict(), f'best_model-epoch-{epoch}.pth', epoch)
+                torch.save(model.state_dict(), f'best_model-epoch-{epoch}.pth')
         
-        writer.add_scalar('LR', optimizer.param_groups[0]['lr'], epoch)
-        writer.add_histogram('pred_scores', torch.cat(pred['pred_scores']), epoch)
+        # writer.add_scalar('LR', optimizer.param_groups[0]['lr'], epoch)
+        # writer.add_histogram('pred_scores', torch.cat(pred['pred_scores']), epoch)
 
         print(f'Epoch {epoch+1} - Loss: {avg_loss:.4f}, LR: {scheduler.get_last_lr()[0]:.2e}')
 

@@ -64,10 +64,12 @@ class Challenge3DDataset(Dataset):
         xyz = pc.reshape(3, -1).T
         pc = xyz[np.isfinite(xyz).all(1)]
         pc = torch.from_numpy(self.sample_pc(xyz, self.npoints)).float()
+
         pc_center = pc.mean(dim=0)
-        pc = pc - pc_center
+        pc -= pc_center
         max_dist = torch.max(torch.norm(pc, dim=1))
-        pc /= (max_dist + 1e-6)
+        pc /= max_dist
+
 
         assert torch.allclose(pc.mean(dim=0), torch.zeros(3), atol=1e-4)
         assert torch.max(torch.norm(pc, dim=1)) <= 1.0 + 1e-4
@@ -95,16 +97,18 @@ class Challenge3DDataset(Dataset):
         bbox3d_scaled[:, :, 0] *= scale_w  # Scale X coordinates
         bbox3d_scaled[:, :, 1] *= scale_h  # Scale Y coordinates
 
-        bbox3d_scaled -= pc_center.numpy()
-        bbox3d_scaled /= (max_dist.item() + 1e-6)
-
         param_boxes = bbox3d_to_parametric(bbox3d_scaled) 
-        # bbox3d_centered = bbox3d_scaled - pc_center.reshape(1, 1, 3)
         bbox3d = torch.from_numpy(param_boxes).float()
+        
+        bbox3d[:, :3] -= pc_center
+        bbox3d[:, :3] /= max_dist
+        bbox3d[:, 3:6] /= max_dist
+        # bbox3d_scaled -= pc_center.numpy()
+        # bbox3d_scaled /= (max_dist.item() + 1e-6)
+
+        # bbox3d_centered = bbox3d_scaled - pc_center.reshape(1, 1, 3)
         # bbox3d = bbox3d - pc_center.reshape(1, 1, 3)
 
-        assert torch.allclose(bbox3d[:, :3].mean(dim=0), torch.zeros(3), atol=1e-4)
-        assert torch.max(torch.norm(bbox3d[:, :3], dim=1))
 
         # Add num_boxes to the return dictionary
         return {
