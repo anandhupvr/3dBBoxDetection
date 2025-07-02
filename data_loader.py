@@ -6,9 +6,8 @@ import  torch.nn.functional as F
 from PIL import Image
 import numpy as np
 from torch_geometric.data import Data, Batch
-from torch_cluster import fps
 
-from utils import corners_to_parametric
+from utils import bbox3d_to_parametric
 
 
 class Challenge3DDataset(Dataset):
@@ -48,7 +47,7 @@ class Challenge3DDataset(Dataset):
     def __getitem__(self, idx):
         sample_dir = self.sample_dirs[idx]
 
-        #rgb image
+        # rgb image
         image = Image.open(os.path.join(sample_dir, "rgb.jpg")).convert("RGB")
         org_w, org_h = image.size
 
@@ -58,20 +57,25 @@ class Challenge3DDataset(Dataset):
         scale_w = self.img_size[1] / org_w
         scale_h = self.img_size[0] / org_h
 
-        #point cloud
+        # point cloud
         pc = np.load(os.path.join(sample_dir, "pc.npy"))
         pc[0] *= scale_w
         pc[1] *= scale_h 
         xyz = pc.reshape(3, -1).T
-        # pc = xyz[np.isfinite(xyz).all(1)]
+        pc = xyz[np.isfinite(xyz).all(1)]
         pc = torch.from_numpy(self.sample_pc(xyz, self.npoints)).float()
-        # pc_center = pc.mean(dim=0)
-        # pc = pc - pc_center
-        #####  there is flat ground plane better to sample more from there ?
+        pc_center = pc.mean(dim=0)
+        pc = pc - pc_center
+        max_dist = torch.max(torch.norm(pc, dim=1))
+        pc /= (max_dist + 1e-6)
 
-        #mask
+        assert torch.allclose(pc.mean(dim=0), torch.zeros(3), atol=1e-4)
+        assert torch.max(torch.norm(pc, dim=1)) <= 1.0 + 1e-4
+
+        #####  there are few flat plane , consider taking less points from there 
+
+        # mask
         mask = np.load(os.path.join(sample_dir, "mask.npy"))
-        # import pdb; pdb.set_trace()
         # Create single-channel combined mask
         combined_mask = np.zeros(mask.shape[1:], dtype=np.uint8)  # [H, W]
         for obj_idx in range(mask.shape[0]):
@@ -90,10 +94,18 @@ class Challenge3DDataset(Dataset):
         bbox3d_scaled = bbox3d.copy()
         bbox3d_scaled[:, :, 0] *= scale_w  # Scale X coordinates
         bbox3d_scaled[:, :, 1] *= scale_h  # Scale Y coordinates
+
+        bbox3d_scaled -= pc_center.numpy()
+        bbox3d_scaled /= (max_dist.item() + 1e-6)
+
+        param_boxes = bbox3d_to_parametric(bbox3d_scaled) 
         # bbox3d_centered = bbox3d_scaled - pc_center.reshape(1, 1, 3)
-        bbox3d = torch.from_numpy(bbox3d_scaled).float()
+        bbox3d = torch.from_numpy(param_boxes).float()
         # bbox3d = bbox3d - pc_center.reshape(1, 1, 3)
-        
+
+        assert torch.allclose(bbox3d[:, :3].mean(dim=0), torch.zeros(3), atol=1e-4)
+        assert torch.max(torch.norm(bbox3d[:, :3], dim=1))
+
         # Add num_boxes to the return dictionary
         return {
             "image": image,            # [3, 480, 640]
@@ -112,7 +124,6 @@ def collate_fn(batch):
     # Handle variable-sized bboxes - keep as list or pad them
     bboxes = [item['bbox3d'] for item in batch]
 
-    # Create PyG Data list
     data_list = []
     for i, item in enumerate(batch):
         pointcloud = item['pointcloud']  # [N, 3]

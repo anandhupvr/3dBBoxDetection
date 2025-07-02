@@ -12,8 +12,6 @@ class LiteMobileNetBackbone(nn.Module):
     def forward(self, x):
         return self.mobilenet(x)
 
-
-
 def test():
     model = LiteMobileNetBackbone()
     input = torch.randn(1, 3, 480, 640);
