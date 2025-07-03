@@ -74,9 +74,19 @@ class MaskBBoxPredictor(nn.Module):
 
         # Prediction heads
         self.bbox_head = nn.Conv2d(64, 7, 1) # x, y, z, w, h , l, theta
+
         self.conf_head = nn.Sequential(
             nn.Conv2d(64, 1, 1)
         )
+
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, x, masks):
 

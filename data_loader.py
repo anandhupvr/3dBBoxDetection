@@ -43,6 +43,9 @@ class Challenge3DDataset(Dataset):
         
         return points[np.concatenate([lower_sample, upper_sample])]
 
+    def normalize_pc_and_boxes(self, pc, boxes):
+        pass
+
     def __len__(self):
         return len(self.sample_dirs)
 
@@ -61,16 +64,18 @@ class Challenge3DDataset(Dataset):
 
         # point cloud
         pc = np.load(os.path.join(sample_dir, "pc.npy"))
-        pc[0] *= scale_w
-        pc[1] *= scale_h 
         xyz = pc.reshape(3, -1).T
+        xyz[:, 0] = xyz[:, 0] * scale_w
+        xyz[:, 1] = xyz[:, 1] * scale_h
+
         pc = xyz[np.isfinite(xyz).all(1)]
-        pc = torch.from_numpy(self.sample_pc(xyz, self.npoints)).float()
+        
+        pc = torch.from_numpy(self.sample_pc(pc, self.npoints)).float()
 
         pc_center = pc.mean(dim=0)
-        pc -= pc_center
+        pc  = pc - pc_center
         max_dist = torch.max(torch.norm(pc, dim=1))
-        pc /= max_dist
+        pc  = pc / (max_dist + 1e-6)
 
 
         assert torch.allclose(pc.mean(dim=0), torch.zeros(3), atol=1e-4)
@@ -96,15 +101,15 @@ class Challenge3DDataset(Dataset):
         #3dbbox
         bbox3d = np.load(os.path.join(sample_dir, "bbox3d.npy"))
         bbox3d_scaled = bbox3d.copy()
-        bbox3d_scaled[:, :, 0] *= scale_w  # Scale X coordinates
+        bbox3d_scaled[:, :, 0] *= scale_w  # Scale X coordinates 
         bbox3d_scaled[:, :, 1] *= scale_h  # Scale Y coordinates
 
         param_boxes = bbox3d_to_parametric(bbox3d_scaled) 
         bbox3d = torch.from_numpy(param_boxes).float()
         
-        bbox3d[:, :3] -= pc_center
-        bbox3d[:, :3] /= max_dist
-        bbox3d[:, 3:6] /= max_dist
+        bbox3d[:, :3]  = (bbox3d[:, :3] - pc_center) / (max_dist + 1e-6)
+        bbox3d[:, 3:6]  = (bbox3d[:, 3:6] / (max_dist + 1e-6))
+        # keeping theta as it is
 
         if (self.augment):
             image, pc, combined_mask, bbox3d = self.apply_augmentation(image, pc, combined_mask, bbox3d)
@@ -115,13 +120,13 @@ class Challenge3DDataset(Dataset):
         # bbox3d = bbox3d - pc_center.reshape(1, 1, 3)
 
 
-        # Add num_boxes to the return dictionary
         return {
             "image": image,            # [3, 480, 640]
             "pointcloud": pc,           # [1024, 3]
             "mask": combined_mask,      # [15, 20]
-            "bbox3d": bbox3d,           # [N, 8, 3] (variable)
-            "num_boxes": torch.tensor(bbox3d.shape[0])  # scalar
+            "bbox3d": bbox3d,           # [N, 7, 3] 
+            "num_boxes": torch.tensor(bbox3d.shape[0]),
+            "norm_params": torch.cat([pc_center, torch.tensor([max_dist])])
         }
     
     def apply_augmentation(self, image, pc, mask, bbox3d):
@@ -135,7 +140,7 @@ class Challenge3DDataset(Dataset):
                 bbox3d[:, 6] = -bbox3d[:, 6] # yaw
 
         if (torch.rand(1).item() < 0.5):
-            angle = np.random.uniform(-10, 10) # recheck this part
+            angle = np.random.uniform(-10, 10) # recheck this part 
             rad = np.deg2rad(angle)
             cos, sin = np.cos(rad), np.sin(rad)
             rot_mat = torch.tensor([
@@ -152,12 +157,12 @@ class Challenge3DDataset(Dataset):
         return image, pc, mask, bbox3d
 
 def collate_fn(batch):
-    # Handle fixed-size elements by stacking
+
     images = torch.stack([item['image'] for item in batch])
     masks = torch.stack([item['mask'] for item in batch])
     num_boxes = torch.stack([item['num_boxes'] for item in batch])
+    norm_params = torch.stack([item['norm_params'] for item in batch])
     
-    # Handle variable-sized bboxes - keep as list or pad them
     bboxes = [item['bbox3d'] for item in batch]
 
     data_list = []
@@ -168,13 +173,13 @@ def collate_fn(batch):
     
     pointcloud_batch = Batch.from_data_list(data_list)
     
-    # Option 1: Return as list of tensors
     return {
         'images': images,          # [B, 3, 480, 640]
-        'pointclouds': pointcloud_batch, # [B, 1024, 3]
+        'pointclouds': pointcloud_batch, # [B, 4096, 3]
         'masks': masks,            # [B, 15, 20]
-        'bboxes': bboxes,          # List of [N_i, 8, 3] tensors
+        'bboxes': bboxes,          # List of [N_i, 7, 3] tensors
         'num_boxes': num_boxes     # [B]
+        ,'norm_params': norm_params # Bx4
     }
 
 def get_splits(dataset_root, val_ratio=0.1, test_ratio=0.1):
@@ -207,3 +212,15 @@ def get_splits(dataset_root, val_ratio=0.1, test_ratio=0.1):
     final_train = torch.utils.data.Subset(train_dataset, train_indices)
     
     return final_train, val, test
+
+def denormalize_boxes(normalized_boxes, norm_params):
+
+    pc_center = norm_params[0:3]
+    max_dist = norm_params[3]
+    
+    denorm_boxes = normalized_boxes.clone()
+    denorm_boxes[:, :3] = normalized_boxes[:, :3] * max_dist + pc_center 
+    denorm_boxes[:, 3:6] = normalized_boxes[:, 3:6] * max_dist  
+
+    
+    return denorm_boxes

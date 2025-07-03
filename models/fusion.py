@@ -56,7 +56,8 @@ class MaskedFusion(nn.Module):
         attn = self.attention(combined)  # [B, 1, 15, 20]
         
         # Apply mask-guided attention
-        attn = attn * mask  # Mask-weighted attention
+        binary_mask = (mask > 0).float()
+        attn = attn * binary_mask 
         
         # Fuse features
         fused = rgb * attn + pc * (1 - attn)

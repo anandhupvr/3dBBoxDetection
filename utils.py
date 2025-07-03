@@ -4,9 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scipy.spatial import ConvexHull
 
 import numpy as np
 from sklearn.decomposition import PCA
+
 
 def bbox3d_to_parametric(bboxes):
     """
@@ -40,9 +42,37 @@ def bbox3d_to_parametric(bboxes):
 
     return np.array(param_boxes)
 
-def parametric_to_bbox3d(param_boxes):
-
-    return np.array(1)
+def parametric_to_bbox3d(box):
+    # Ensure all inputs are float64
+    cx, cy, cz, dx, dy, dz, yaw = map(float, box)
+    
+    # Create unrotated corners (local coordinates)
+    half_dx = dx / 2
+    half_dy = dy / 2
+    half_dz = dz / 2
+    
+    corners = np.array([
+        [ half_dx,  half_dy,  half_dz],
+        [ half_dx, -half_dy,  half_dz],
+        [-half_dx, -half_dy,  half_dz],
+        [-half_dx,  half_dy,  half_dz],
+        [ half_dx,  half_dy, -half_dz],
+        [ half_dx, -half_dy, -half_dz],
+        [-half_dx, -half_dy, -half_dz],
+        [-half_dx,  half_dy, -half_dz]
+    ], dtype=np.float64)  # Explicitly set dtype
+    
+    # Rotation matrix (Z-axis)
+    rot_matrix = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw),  np.cos(yaw), 0],
+        [0,            0,           1]
+    ], dtype=np.float64)
+    
+    rotated_corners = np.dot(corners, rot_matrix.T)
+    rotated_corners += np.array([cx, cy, cz], dtype=np.float64)  # Ensure float64
+    
+    return rotated_corners
 
 
 def decode_predictions(preds, conf_thresh=0.5):
@@ -65,51 +95,38 @@ def decode_predictions(preds, conf_thresh=0.5):
     return boxes[mask], confidences[mask]
 
 
-def nms_3d(boxes, scores, iou_threshold=0.5):
-    """
-    3D Non-Maximum Suppression
-    Args:
-        boxes: [N,8,3] corner coordinates
-        scores: [N] confidence scores
-    Returns:
-        keep_indices: indices of kept boxes
-    """
-    # Calculate 3D IoU matrix
-    iou_matrix = calculate_3d_iou_open3d(boxes, boxes)  # [N,N]
+#  not the best 
+def calculate_aabb_iou(box1, box2):
     
-    # Standard NMS implementation
-    keep = []
-    order = scores.argsort(descending=True)
-    
-    while order.numel() > 0:
-        i = order[0]
-        keep.append(i)
-        
-        # Calculate IoU with remaining boxes
-        ious = iou_matrix[i, order[1:]]
-        
-        # Keep boxes with IoU < threshold
-        keep_mask = ious < iou_threshold
-        order = order[1:][keep_mask]
-        
-    return torch.tensor(keep, device=boxes.device)
+    box1_corners = parametric_to_bbox3d(box1)
+    box2_corners = parametric_to_bbox3d(box2)
 
 
-def calculate_3d_iou_open3d(box1, box2):
-    """Calculate exact 3D IoU using Open3D"""
-    # Create oriented bounding boxes
-    obb1 = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(box1))
-    obb2 = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(box2))
-    
-    # Compute intersection volume
-    intersection = o3d.geometry.OrientedBoundingBox.get_intersection_volume(obb1, obb2)
-    
-    # Compute volumes
-    vol1 = obb1.volume()
-    vol2 = obb2.volume()
-    union = vol1 + vol2 - intersection
-    
-    return intersection / union if union > 1e-6 else 0.0
+    # Compute the axis-aligned bounding box for each box
+    min1 = np.min(box1_corners, axis=0)
+    max1 = np.max(box1_corners, axis=0)
+    min2 = np.min(box2_corners, axis=0)
+    max2 = np.max(box2_corners, axis=0)
+
+    # Compute the intersection box
+    inter_min = np.maximum(min1, min2)
+    inter_max = np.minimum(max1, max2)
+
+    # Check if there is an intersection
+    if np.all(inter_min <= inter_max):
+        intersection_volume = np.prod(inter_max - inter_min)
+    else:
+        intersection_volume = 0.0
+
+    # Compute the volumes of both boxes
+    vol1 = np.prod(max1 - min1)
+    vol2 = np.prod(max2 - min2)
+
+    # Compute the union volume
+    union_volume = vol1 + vol2 - intersection_volume
+
+    # Return IoU
+    return intersection_volume / union_volume if union_volume > 1e-6 else 0.0
 
 class BoxLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0):
@@ -119,7 +136,7 @@ class BoxLoss(nn.Module):
         self.reg_loss = nn.SmoothL1Loss(reduction='none')
         
     def forward(self, preds, batch):
-        """
+        """poly_area
         Args:
             preds: Tuple of (bbox_params, confidences, uncertainties)
                    - bbox_params: [B,A,H,W,7]
@@ -232,3 +249,4 @@ class Mask3DLoss(nn.Module):
 
         # Normalize by batch size (with epsilon to prevent div by zero)
         return total_loss / (batch_size + self.eps)
+    
