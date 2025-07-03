@@ -39,22 +39,10 @@ def bbox3d_to_parametric(bboxes):
         param_boxes.append(param_box)
 
     return np.array(param_boxes)
-def corners_to_parametric(corners):
-    # device = corners.device
 
-    # Center calculation (same)
-    center = corners.mean(dim=0)
+def parametric_to_bbox3d(param_boxes):
 
-    # Size calculation using PCA for orientation-agnostic dimensions
-    cov = (corners - center).T @ (corners - center)
-    eigvals, eigvecs = torch.linalg.eigh(cov)
-    size = 2 * torch.sqrt(eigvals)[[1,2,0]]  # Reorder to w,h,d
-
-    # Yaw calculation using dominant direction
-    front_vector = eigvecs[:,0]  # Principal component
-    yaw = torch.atan2(front_vector[1], front_vector[0])
-
-    return torch.cat([center, size, yaw.unsqueeze(0)])
+    return np.array(1)
 
 
 def decode_predictions(preds, conf_thresh=0.5):
@@ -185,49 +173,6 @@ class BoxLoss(nn.Module):
         focal_weight = (1-pt).pow(self.gamma)
         loss = F.binary_cross_entropy(pred, target, reduction='none')
         return (self.alpha * focal_weight * loss).mean()
-
-# class Mask3DLoss(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.reg_loss = nn.SmoothL1Loss(beta=0.1)
-#         self.conf_loss = nn.BCEWithLogitsLoss()
-
-#     def forward(self, pred_boxes, pred_scores, gt_boxes):
-
-#         total_loss = 0.0
-#         # with torch.no_grad():
-#         #     pred_boxes = [torch.clamp(b, -10, 10) for b in pred_boxes]
-#         for boxes, scores, gt in zip(pred_boxes, pred_scores, gt_boxes):
-#             gt = gt.to(boxes.device)
-#             # Convert GT corners to parametric
-#             # gt_params = torch.stack([corners_to_parametric(b.to(boxes.device)) for b in gt]) if len(gt) > 0 else torch.zeros(0,7, device=boxes.device)
-#             gt_params = torch.stack([b for b in gt]) if len(gt) > 0 else torch.zeros(0, 7, device=boxes.device)
-#             gt_params = gt_params.to(boxes.device)
-
-#             # Case 1: No objects
-#             if len(gt) == 0:
-#                 total_loss += torch.sum(scores**2)  # Penalize FP
-#                 continue
-   
-#             # Case 2: Perfect match
-#             if len(boxes) == len(gt_params):
-#                 total_loss += self.reg_loss(boxes.to(boxes.device), gt_params.to(boxes.device))
-#                 total_loss += self.conf_loss(scores, torch.ones_like(scores))
-
-#             # Case 3: More predictions than GT
-#             elif len(boxes) > len(gt_params):
-#                 total_loss += self.reg_loss(boxes[:len(gt_params)], gt_params)
-#                 total_loss += self.conf_loss(scores[:len(gt_params)], torch.ones_like(scores[:len(gt_params)]))
-#                 total_loss += 0.3 * torch.sum(scores[len(gt_params):]**2)  # FP penalty
-
-#             # Case 4: Fewer predictions than GT
-#             else:
-
-#                 total_loss += self.reg_loss(boxes, gt_params[:len(boxes)].to(boxes.device))
-#                 total_loss += self.conf_loss(scores, torch.ones_like(scores))
-#                 total_loss += 0.3 * (len(gt_params) - len(boxes))  # FN penalty
-
-#         return total_loss / max(len(pred_boxes), 1)
 
 class Mask3DLoss(nn.Module):
     def __init__(self):

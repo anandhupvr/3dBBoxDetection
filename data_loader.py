@@ -8,14 +8,16 @@ import numpy as np
 from torch_geometric.data import Data, Batch
 
 from utils import bbox3d_to_parametric
+from torch.utils.data import random_split
 
 
 class Challenge3DDataset(Dataset):
-    def __init__(self, root_dir, npoints=4096, img_size=(480, 640)):
+    def __init__(self, root_dir, augment=False, npoints=4096, img_size=(480, 640)):
         self.root_dir = root_dir
         self.img_size = img_size
         self.sample_dirs =  sorted([os.path.join(root_dir, d) for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))])
         self.npoints = npoints
+        self.augment = augment
 
         self.rgb_transform = transforms.Compose([
             transforms.Resize(self.img_size),
@@ -103,6 +105,9 @@ class Challenge3DDataset(Dataset):
         bbox3d[:, :3] -= pc_center
         bbox3d[:, :3] /= max_dist
         bbox3d[:, 3:6] /= max_dist
+
+        if (self.augment):
+            image, pc, combined_mask, bbox3d = self.apply_augmentation(image, pc, combined_mask, bbox3d)
         # bbox3d_scaled -= pc_center.numpy()
         # bbox3d_scaled /= (max_dist.item() + 1e-6)
 
@@ -118,6 +123,33 @@ class Challenge3DDataset(Dataset):
             "bbox3d": bbox3d,           # [N, 8, 3] (variable)
             "num_boxes": torch.tensor(bbox3d.shape[0])  # scalar
         }
+    
+    def apply_augmentation(self, image, pc, mask, bbox3d):
+        
+        if (torch.rand(1).item() < 0.5):
+            image = torch.flip(image, [2])
+            pc[:, 0] = -pc[:, 0]
+            mask = torch.flip(mask, [1])
+            if (len(bbox3d) > 0):
+                bbox3d[:, :, 0] = -bbox3d[:, :, 0]
+                bbox3d[:, 6] = -bbox3d[:, 6] # yaw
+
+        if (torch.rand(1).item() < 0.5):
+            angle = np.random.uniform(-10, 10) # recheck this part
+            rad = np.deg2rad(angle)
+            cos, sin = np.cos(rad), np.sin(rad)
+            rot_mat = torch.tensor([
+                [cos, 0, sin],
+                [0, 1, 0],
+                [-sin, 0, cos]
+            ], dtype=torch.float32)
+            
+            pc = torch.mm(pc, rot_mat.T)
+            if len(bbox3d) > 0:
+                bbox3d[:, :3] = torch.mm(bbox3d[:, :3], rot_mat.T)
+                bbox3d[:, 6] += rad  # yaw
+        
+        return image, pc, mask, bbox3d
 
 def collate_fn(batch):
     # Handle fixed-size elements by stacking
@@ -143,5 +175,35 @@ def collate_fn(batch):
         'masks': masks,            # [B, 15, 20]
         'bboxes': bboxes,          # List of [N_i, 8, 3] tensors
         'num_boxes': num_boxes     # [B]
-    } 
+    }
+
+def get_splits(dataset_root, val_ratio=0.1, test_ratio=0.1):
+    full_dataset = Challenge3DDataset(dataset_root, augment=False)
     
+    # Calculate lengths
+    total_len = len(full_dataset)
+    val_len = int(total_len * val_ratio)
+    test_len = int(total_len * test_ratio)
+    train_len = total_len - val_len - test_len
+    
+    # Split the dataset
+    train, val, test = random_split(
+        full_dataset, 
+        [train_len, val_len, test_len],
+        generator=torch.Generator().manual_seed(42)
+    )
+    
+    train_dataset = Challenge3DDataset(
+        root_dir=dataset_root,
+        augment=True,  # Enable augmentation for training
+        npoints=full_dataset.npoints,
+        img_size=full_dataset.img_size
+    )
+    
+    # Get the original indices from the split
+    train_indices = train.indices
+    
+    # Create a Subset using the augmented dataset with original indices
+    final_train = torch.utils.data.Subset(train_dataset, train_indices)
+    
+    return final_train, val, test
