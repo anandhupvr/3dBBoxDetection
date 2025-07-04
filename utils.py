@@ -4,10 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scipy.spatial import ConvexHull
-
-import numpy as np
 from sklearn.decomposition import PCA
+from scipy.optimize import linear_sum_assignment
+
 
 
 def bbox3d_to_parametric(bboxes):
@@ -128,6 +127,51 @@ def calculate_aabb_iou(box1, box2):
     # Return IoU
     return intersection_volume / union_volume if union_volume > 1e-6 else 0.0
 
+
+
+def hungarian_matching(pred_boxes, gt_boxes, pred_scores, iou_threshold=0.5):
+    """
+    Optimal assignment using Hungarian algorithm with 3D IoU
+    Args:
+        pred_boxes: [N, 7] predicted boxes
+        gt_boxes: [M, 7] ground truth boxes
+        pred_scores: [N] confidence scores
+        iou_threshold: minimum IoU for positive match
+    Returns:
+        matches: List of (pred_idx, gt_idx) tuples
+        unmatched_preds: List of unmatched prediction indices
+        unmatched_gts: List of unmatched ground truth indices
+    """
+    if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+        return [], list(range(len(pred_boxes))), list(range(len(gt_boxes)))
+    
+    # Compute cost matrix (1 - IoU)
+    cost_matrix = torch.zeros(len(pred_boxes), len(gt_boxes), device=pred_boxes.device)
+    
+    for i, pred_box in enumerate(pred_boxes):
+        for j, gt_box in enumerate(gt_boxes):
+            iou = calculate_aabb_iou(pred_box, gt_box)
+            cost_matrix[i, j] = 1.0 - iou  # Cost = 1 - IoU
+    
+    # Hungarian algorithm
+    pred_indices, gt_indices = linear_sum_assignment(cost_matrix.cpu().numpy())
+    
+    # Filter matches by IoU threshold
+    matches = []
+    unmatched_preds = set(range(len(pred_boxes)))
+    unmatched_gts = set(range(len(gt_boxes)))
+    
+    for pred_idx, gt_idx in zip(pred_indices, gt_indices):
+        iou = 1.0 - cost_matrix[pred_idx, gt_idx]
+        if iou >= iou_threshold:
+            matches.append((pred_idx, gt_idx))
+            unmatched_preds.discard(pred_idx)
+            unmatched_gts.discard(gt_idx)
+    
+    return matches, list(unmatched_preds), list(unmatched_gts)
+
+
+
 class BoxLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0):
         super().__init__()
@@ -201,7 +245,7 @@ class Mask3DLoss(nn.Module):
     def forward(self, pred_boxes, pred_scores, gt_boxes):
         total_loss = 0.0
         batch_size = len(pred_boxes)
-        
+        import pdb; pdb.set_trace()
         for boxes, scores, gt in zip(pred_boxes, pred_scores, gt_boxes):
             # Input validation
             if torch.isnan(boxes).any() or torch.isnan(scores).any():

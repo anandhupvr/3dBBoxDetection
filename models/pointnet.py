@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MLP, PointNetConv, fps, radius, knn_interpolate, global_max_pool
+from torch_geometric.nn import MLP, PointNetConv, fps, radius, global_max_pool
 
 class SAModule(nn.Module):
     def __init__(self, ratio, radius, mlp_channels):
