@@ -8,7 +8,8 @@ from data_loader import Challenge3DDataset, collate_fn, denormalize_boxes
 
 from models.model import Simple3DDetectionModel
 
-from utils import BoxLoss, Mask3DLoss, calculate_aabb_iou
+from utils import Mask3DLoss, calculate_aabb_iou
+from loss import Loss
 
 import open3d as o3d
 import matplotlib
@@ -27,7 +28,6 @@ def denormalize_image(image):
     return np.clip(image, 0, 1)
 
 def visualize_sample(sample, idx=0):
-    # import pdb; pdb.set_trace()
 
     # # Extract data
     image = sample['images'][idx].permute(1, 2, 0).cpu().numpy()
@@ -35,10 +35,8 @@ def visualize_sample(sample, idx=0):
     mask = sample['masks'][idx].cpu().numpy()
     bboxes = sample['bboxes'][idx].cpu().numpy() if isinstance(sample['bboxes'][idx], torch.Tensor) else sample['bboxes'][idx]
     
-    # # Normalize image if needed for display
     image_disp = denormalize_image(image)
     
-    # # Visualization 1: RGB Image with Mask Overlay
     plt.figure(figsize=(12, 6))
     # plt.subplot(1, 2, 1)
     plt.imshow(image_disp)
@@ -139,7 +137,6 @@ def evaluate(model, test_loader, loss_fn, device, writer=None, epoch=0):
     avg_center_dist = torch.mean(torch.stack(center_dist_list)).item()
     avg_size_diff = torch.mean(torch.stack(size_diff_list)).item()
     
-    # Log to TensorBoard if writer provided
     if writer is not None:
         writer.add_scalar('Loss/test', avg_test_loss, epoch)
         writer.add_scalar('Metrics/3D_IoU', avg_iou, epoch)
@@ -216,7 +213,6 @@ def train_single_phase(model, dataloader, val_loader, test_loader, loss_fn, epoc
                 # Forward pass
                 optimizer.zero_grad()
                 pred = model(batch)
-                # loss = loss_fn(pred, batch)
                 loss = loss_fn(pred['pred_boxes'], pred['pred_scores'], batch['bboxes'])
                 if torch.isnan(loss):
                     print(f"NaN detected in batch {batch}")
@@ -271,8 +267,7 @@ def main():
 
     
     model = Simple3DDetectionModel()
-    # loss_fn = BoxLoss()
-    loss_fn = Mask3DLoss()
+    loss_fn = Loss()
     
     # Single-phase training
     train_single_phase(model, train_loader, val_loader, test_loader, loss_fn, epochs=50, device=device)
